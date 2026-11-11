@@ -309,6 +309,54 @@ public sealed class ClassService : IClassService
     }
 
     // ==========================================
+    // GET MY APPLICATIONS
+    // ==========================================
+
+    public async Task<IReadOnlyList<MyHoldResponse>> GetMyHoldsAsync(
+        string studentId,
+        CancellationToken cancellationToken)
+    {
+        // Obtain the current time from PostgreSQL.
+        var databaseNow =
+            await GetDatabaseNowAsync(cancellationToken);
+
+        // Retrieve every application belonging to this student.
+        var holds = await _db.Holds
+            .AsNoTracking()
+            .Where(h => h.StudentId == studentId)
+            .OrderByDescending(h => h.CreatedAt)
+            .Select(h => new
+            {
+                h.Id,
+                h.ClassId,
+                ClassName = h.Class.Name,
+                h.Status,
+                h.ExpiresAt
+            })
+            .ToListAsync(cancellationToken);
+
+        // Build the API response.
+        return holds.Select(h =>
+        {
+            // Derive expiry at read time.
+            var currentStatus =
+                h.Status == HoldStatus.HELD &&
+                h.ExpiresAt <= databaseNow
+                    ? HoldStatus.EXPIRED
+                    : h.Status;
+
+            return new MyHoldResponse
+            {
+                HoldId = h.Id,
+                ClassId = h.ClassId,
+                ClassName = h.ClassName,
+                Status = currentStatus.ToString(),
+                ExpiresAt = FormatUtc(h.ExpiresAt)
+            };
+        }).ToList();
+    }
+    
+    // ==========================================
     // GET HOLD STATUS
     // ==========================================
 

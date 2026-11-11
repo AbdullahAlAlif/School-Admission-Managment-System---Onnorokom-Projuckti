@@ -5,6 +5,7 @@ using SchoolAdmission.Api.Configuration;
 using SchoolAdmission.Api.Data;
 using SchoolAdmission.Api.DTOs;
 using SchoolAdmission.Api.Services;
+using SchoolAdmission.Api.Background;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -57,6 +58,9 @@ var connectionString =
 // Register Entity Framework Core with PostgreSQL.
 builder.Services.AddDbContext<SchoolAdmissionDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+// Register automatic hold expiry worker.
+builder.Services.AddHostedService<HoldExpiryWorker>();
 
 // Configure admission hold duration.
 var holdDurationRaw =
