@@ -308,6 +308,338 @@ public sealed class ClassService : IClassService
         );
     }
 
+    // ==========================================
+    // GET HOLD STATUS
+    // ==========================================
+
+    public async Task<HoldResponse?> GetHoldAsync(
+        string holdId,
+        CancellationToken cancellationToken)
+    {
+        // Obtain the current time from PostgreSQL.
+        var databaseNow =
+            await GetDatabaseNowAsync(cancellationToken);
+
+        var hold = await _db.Holds
+            .AsNoTracking()
+            .Where(h => h.Id == holdId)
+            .Select(h => new
+            {
+                h.Id,
+                h.ClassId,
+                h.Status,
+                h.ExpiresAt
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (hold is null)
+        {
+            return null;
+        }
+
+        // Derive expiry at read time.
+        var currentStatus =
+            hold.Status == HoldStatus.HELD &&
+            hold.ExpiresAt <= databaseNow
+                ? HoldStatus.EXPIRED
+                : hold.Status;
+
+        return new HoldResponse
+        {
+            HoldId = hold.Id,
+            ClassId = hold.ClassId,
+            Status = currentStatus.ToString(),
+            ExpiresAt = FormatUtc(hold.ExpiresAt)
+        };
+    }
+
+
+    // ==========================================
+    // CONFIRM ADMISSION
+    // ==========================================
+
+    public async Task<ConfirmHoldResult> ConfirmHoldAsync(
+        string holdId,
+        string studentId,
+        CancellationToken cancellationToken)
+    {
+        // STEP 1: Begin transaction.
+        await using var transaction =
+            await _db.Database.BeginTransactionAsync(
+                cancellationToken
+            );
+
+        // STEP 2: Find the class ID associated with this hold.
+        //
+        // ClassId is immutable, so we can read it before
+        // acquiring the class row lock.
+
+        var classId = await _db.Holds
+            .AsNoTracking()
+            .Where(h => h.Id == holdId)
+            .Select(h => h.ClassId)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (classId is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.NotFound
+            );
+        }
+
+        // STEP 3: Lock the class row.
+        //
+        // All operations affecting seat allocation for this
+        // class follow the same class-first locking order.
+
+        var lockedClasses = await _db.Classes
+            .FromSqlInterpolated(
+                $"SELECT * FROM classes WHERE id = {classId} FOR UPDATE"
+            )
+            .ToListAsync(cancellationToken);
+
+        if (lockedClasses.Count == 0)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.NotFound
+            );
+        }
+
+        // STEP 4: Load the hold again inside the transaction.
+
+        var hold = await _db.Holds
+            .SingleOrDefaultAsync(
+                h => h.Id == holdId,
+                cancellationToken
+            );
+
+        if (hold is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.NotFound
+            );
+        }
+
+        // STEP 5: Verify ownership.
+
+        if (hold.StudentId != studentId)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.NotOwner
+            );
+        }
+
+        // STEP 6: Check the database clock.
+
+        var databaseNow =
+            await GetDatabaseNowAsync(cancellationToken);
+
+        // STEP 7: Detect an expired HELD application.
+
+        if (hold.Status == HoldStatus.HELD &&
+            hold.ExpiresAt <= databaseNow)
+        {
+            hold.Status = HoldStatus.EXPIRED;
+
+            await _db.SaveChangesAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.Expired
+            );
+        }
+
+        // STEP 8: Handle existing terminal states.
+
+        if (hold.Status == HoldStatus.EXPIRED)
+        {
+            await transaction.CommitAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.Expired
+            );
+        }
+
+        if (hold.Status == HoldStatus.CANCELLED)
+        {
+            await transaction.CommitAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.Cancelled
+            );
+        }
+
+        // Repeated confirmation is successful.
+        // We never increase a separate seat counter.
+        if (hold.Status == HoldStatus.CONFIRMED)
+        {
+            await transaction.CommitAsync(cancellationToken);
+
+            return new ConfirmHoldResult(
+                ConfirmHoldStatus.Confirmed,
+                new HoldStatusResponse
+                {
+                    HoldId = hold.Id,
+                    Status = HoldStatus.CONFIRMED.ToString()
+                }
+            );
+        }
+
+        // STEP 9: Confirm the application.
+
+        hold.Status = HoldStatus.CONFIRMED;
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        return new ConfirmHoldResult(
+            ConfirmHoldStatus.Confirmed,
+            new HoldStatusResponse
+            {
+                HoldId = hold.Id,
+                Status = HoldStatus.CONFIRMED.ToString()
+            }
+        );
+    }
+
+
+        // ==========================================
+        // CANCEL ADMISSION
+        // ==========================================
+
+        public async Task<CancelHoldStatus> CancelHoldAsync(
+            string holdId,
+            string studentId,
+            CancellationToken cancellationToken)
+        {
+            // STEP 1: Begin transaction.
+
+            await using var transaction =
+                await _db.Database.BeginTransactionAsync(
+                    cancellationToken
+                );
+
+            // STEP 2: Find the associated class.
+
+            var classId = await _db.Holds
+                .AsNoTracking()
+                .Where(h => h.Id == holdId)
+                .Select(h => h.ClassId)
+                .SingleOrDefaultAsync(cancellationToken);
+
+            if (classId is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+
+                return CancelHoldStatus.NotFound;
+            }
+
+            // STEP 3: Lock the class row.
+
+            var lockedClasses = await _db.Classes
+                .FromSqlInterpolated(
+                    $"SELECT * FROM classes WHERE id = {classId} FOR UPDATE"
+                )
+                .ToListAsync(cancellationToken);
+
+            if (lockedClasses.Count == 0)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+
+                return CancelHoldStatus.NotFound;
+            }
+
+            // STEP 4: Load the application.
+
+            var hold = await _db.Holds
+                .SingleOrDefaultAsync(
+                    h => h.Id == holdId,
+                    cancellationToken
+                );
+
+            if (hold is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+
+                return CancelHoldStatus.NotFound;
+            }
+
+            // STEP 5: Verify ownership.
+
+            if (hold.StudentId != studentId)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+
+                return CancelHoldStatus.NotOwner;
+            }
+
+            // STEP 6: Read PostgreSQL time.
+
+            var databaseNow =
+                await GetDatabaseNowAsync(cancellationToken);
+
+            // STEP 7: Detect expiry.
+
+            if (hold.Status == HoldStatus.HELD &&
+                hold.ExpiresAt <= databaseNow)
+            {
+                hold.Status = HoldStatus.EXPIRED;
+
+                await _db.SaveChangesAsync(cancellationToken);
+
+                await transaction.CommitAsync(cancellationToken);
+
+                return CancelHoldStatus.Expired;
+            }
+
+            // STEP 8: Handle expired application.
+
+            if (hold.Status == HoldStatus.EXPIRED)
+            {
+                await transaction.CommitAsync(cancellationToken);
+
+                return CancelHoldStatus.Expired;
+            }
+
+            // STEP 9: Confirmed applications cannot be cancelled.
+
+            if (hold.Status == HoldStatus.CONFIRMED)
+            {
+                await transaction.CommitAsync(cancellationToken);
+
+                return CancelHoldStatus.Confirmed;
+            }
+
+            // STEP 10: Cancelling an already cancelled application
+            // is allowed and returns success (idempotent).
+
+            if (hold.Status == HoldStatus.CANCELLED)
+            {
+                await transaction.CommitAsync(cancellationToken);
+
+                return CancelHoldStatus.Cancelled;
+            }
+
+            // STEP 11: Cancel the HELD application.
+
+            hold.Status = HoldStatus.CANCELLED;
+
+            await _db.SaveChangesAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+
+            return CancelHoldStatus.Cancelled;
+        }
 
     // ==========================================
     // DATABASE CLOCK

@@ -1,5 +1,5 @@
 using SchoolAdmission.Api.DTOs;
-
+using SchoolAdmission.Api.Models;
 namespace SchoolAdmission.Api.Services;
 
 public interface IClassService
@@ -21,6 +21,23 @@ public interface IClassService
 
     Task<HoldCreationResult> CreateHoldAsync(
         string classId,
+        string studentId,
+        CancellationToken cancellationToken
+    );
+
+    Task<HoldResponse?> GetHoldAsync(
+        string holdId,
+        CancellationToken cancellationToken
+    );
+
+    Task<ConfirmHoldResult> ConfirmHoldAsync(
+        string holdId,
+        string studentId,
+        CancellationToken cancellationToken
+    );
+
+    Task<CancelHoldStatus> CancelHoldAsync(
+        string holdId,
         string studentId,
         CancellationToken cancellationToken
     );
