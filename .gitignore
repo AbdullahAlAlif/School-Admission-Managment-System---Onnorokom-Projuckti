@@ -1,0 +1,21 @@
+# .NET build files
+**/bin/
+**/obj/
+
+# Node dependencies
+frontend/node_modules/
+
+# Frontend build output
+frontend/dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor settings
+.vscode/
+
+# Windows files
+Thumbs.db
+Desktop.ini
