@@ -58,6 +58,25 @@ services:
         condition: service_healthy
 
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+
+    container_name: school-admission-frontend
+
+    restart: unless-stopped
+
+    ports:
+      - "3000:80"
+
+    depends_on:
+      backend:
+        condition: service_started
+
 
 volumes:
   postgres_data:
