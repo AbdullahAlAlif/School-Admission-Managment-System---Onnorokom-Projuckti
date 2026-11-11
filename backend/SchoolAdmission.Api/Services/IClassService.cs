@@ -13,4 +13,15 @@ public interface IClassService
     Task<IReadOnlyList<ClassResponse>> GetAllAsync(
         CancellationToken cancellationToken
     );
+
+    Task<ClassResponse?> GetByIdAsync(
+        string classId,
+        CancellationToken cancellationToken
+    );
+
+    Task<HoldCreationResult> CreateHoldAsync(
+        string classId,
+        string studentId,
+        CancellationToken cancellationToken
+    );
 }

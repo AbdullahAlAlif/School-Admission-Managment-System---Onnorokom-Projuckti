@@ -1,5 +1,7 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using SchoolAdmission.Api.Configuration;
 using SchoolAdmission.Api.Data;
 using SchoolAdmission.Api.DTOs;
 using SchoolAdmission.Api.Services;
@@ -55,6 +57,29 @@ var connectionString =
 // Register Entity Framework Core with PostgreSQL.
 builder.Services.AddDbContext<SchoolAdmissionDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+// Configure admission hold duration.
+var holdDurationRaw =
+    builder.Configuration["HOLD_DURATION_SECONDS"];
+
+if (!int.TryParse(
+        holdDurationRaw,
+        NumberStyles.Integer,
+        CultureInfo.InvariantCulture,
+        out var holdDurationSeconds)
+    || holdDurationSeconds <= 0)
+{
+    holdDurationSeconds = 600;
+
+    Console.WriteLine(
+        "WARNING: Invalid or missing HOLD_DURATION_SECONDS. " +
+        "Using the default of 600 seconds."
+    );
+}
+
+builder.Services.AddSingleton(
+    new HoldSettings(holdDurationSeconds)
+);
 
 var app = builder.Build();
 
