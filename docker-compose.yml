@@ -1,4 +1,6 @@
+
 services:
+
 
   db:
     image: postgres:17-alpine
@@ -19,11 +21,42 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d school_admission"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d school_admission
+
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+
+
+ 
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: school-admission-api
+
+    restart: unless-stopped
+
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=school_admission;Username=postgres;Password=postgres"
+
+      HOLD_DURATION_SECONDS: ${HOLD_DURATION_SECONDS:-600}
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+      db:
+        condition: service_healthy
+
 
 
 volumes:

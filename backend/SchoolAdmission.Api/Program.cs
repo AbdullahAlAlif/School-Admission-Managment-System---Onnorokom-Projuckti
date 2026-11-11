@@ -87,6 +87,16 @@ builder.Services.AddSingleton(
 
 var app = builder.Build();
 
+
+// APPLY DATABASE MIGRATIONS AT STARTUP
+await using (var scope = app.Services.CreateAsyncScope())
+{
+    var db = scope.ServiceProvider
+        .GetRequiredService<SchoolAdmissionDbContext>();
+
+    await db.Database.MigrateAsync();
+}
+
 // Enable OpenAPI documentation during development.
 if (app.Environment.IsDevelopment())
 {
