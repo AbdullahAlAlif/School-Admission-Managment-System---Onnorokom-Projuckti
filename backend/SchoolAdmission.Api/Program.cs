@@ -1,10 +1,35 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SchoolAdmission.Api.Data;
+using SchoolAdmission.Api.DTOs;
+using SchoolAdmission.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Register API controllers.
 builder.Services.AddControllers();
+
+// Register application services.
+builder.Services.AddScoped<IClassService, ClassService>();
+
+// Keep model-binding errors in our standard API format.
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var message = context.ModelState.Values
+            .SelectMany(entry => entry.Errors)
+            .Select(error => error.ErrorMessage)
+            .FirstOrDefault()
+            ?? "The request data is invalid.";
+
+        return new BadRequestObjectResult(
+            new ApiErrorResponse(
+                new ApiErrorDetail("INVALID_REQUEST", message)
+            )
+        );
+    };
+});
 
 // Enable OpenAPI documentation.
 builder.Services.AddOpenApi();
